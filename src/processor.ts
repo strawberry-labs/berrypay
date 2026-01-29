@@ -195,6 +195,9 @@ export class PaymentProcessor extends EventEmitter {
       this.monitor.addAccount(charge.address);
     }
 
+    // Check for missed payments on startup (poll blockchain)
+    await this.checkMissedPayments();
+
     // Start WebSocket monitor
     await this.monitor.start();
 
@@ -204,6 +207,66 @@ export class PaymentProcessor extends EventEmitter {
     }, 10000); // Check every 10 seconds
 
     this.emit("started", { resumedCharges: activeCharges.length });
+  }
+
+  /**
+   * Check blockchain for any payments that occurred while offline
+   */
+  private async checkMissedPayments(): Promise<void> {
+    const activeCharges = this.listActiveCharges();
+
+    for (const charge of activeCharges) {
+      try {
+        // Check for pending blocks on this ephemeral address
+        const pending = await this.wallet.getPendingBlocks(charge.accountIndex);
+
+        if (pending.length > 0) {
+          this.emit("recovery:found", { chargeId: charge.id, pendingCount: pending.length });
+
+          // Receive all pending
+          for (const p of pending) {
+            try {
+              await this.wallet.receive(p.hash, p.amount, charge.accountIndex);
+
+              // Update charge state
+              const tx: PaymentTransaction = {
+                hash: p.hash,
+                from: p.source,
+                amountRaw: p.amount,
+                amountNano: BerryPayWallet.rawToNano(p.amount),
+                timestamp: new Date(),
+              };
+              charge.transactions.push(tx);
+
+              const newReceived = BigInt(charge.receivedRaw) + BigInt(p.amount);
+              charge.receivedRaw = newReceived.toString();
+              charge.receivedNano = BerryPayWallet.rawToNano(charge.receivedRaw);
+
+              this.emit("charge:payment", { charge, transaction: tx });
+            } catch (err) {
+              this.emit("error", err);
+            }
+          }
+
+          // Check if now fully paid
+          if (BigInt(charge.receivedRaw) >= BigInt(charge.amountRaw)) {
+            charge.status = "completed";
+            charge.completedAt = new Date();
+            this.persistStateNow();
+            this.emit("charge:completed", charge);
+
+            if (this.autoSweep) {
+              await this.sweepCharge(charge.id);
+            }
+          } else if (BigInt(charge.receivedRaw) > BigInt(0)) {
+            charge.status = "partial";
+            this.persistState();
+          }
+        }
+      } catch (err) {
+        this.emit("error", err);
+      }
+    }
   }
 
   stop(): void {

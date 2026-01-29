@@ -454,6 +454,10 @@ charge
       if (resumedCharges > 0) console.log(chalk.blue(`Resumed ${resumedCharges} active charge(s)`));
     });
 
+    processor.on("recovery:found", ({ chargeId, pendingCount }) => {
+      console.log(chalk.yellow(`\nRecovering ${pendingCount} missed payment(s) for ${chargeId}`));
+    });
+
     processor.on("connected", () => console.log(chalk.green("Connected")));
     processor.on("disconnected", () => console.log(chalk.yellow("Disconnected")));
 
@@ -494,7 +498,7 @@ charge
 
 charge
   .command("status")
-  .description("Check charge status")
+  .description("Check charge status (polls blockchain)")
   .argument("<id>", "Charge ID")
   .action(async (id: string) => {
     const wallet = getWallet();
@@ -506,13 +510,54 @@ charge
       process.exit(1);
     }
 
-    console.log(chalk.cyan("Charge:"), chargeData.id);
-    console.log(chalk.gray("  Status:"), chargeData.status);
-    console.log(chalk.gray("  Address:"), chargeData.address);
-    console.log(chalk.gray("  Amount:"), chargeData.amountNano, "XNO");
-    console.log(chalk.gray("  Received:"), chargeData.receivedNano, "XNO");
+    const spinner = ora("Checking blockchain...").start();
 
-    console.log(JSON.stringify(chargeData, null, 2));
+    try {
+      // Check blockchain for actual balance and pending
+      const { balance, pending } = await wallet.getBalance(chargeData.accountIndex);
+      const pendingBlocks = await wallet.getPendingBlocks(chargeData.accountIndex);
+
+      spinner.stop();
+
+      const totalOnChain = BigInt(balance) + BigInt(pending);
+      const totalOnChainNano = BerryPayWallet.rawToNano(totalOnChain.toString());
+      const required = BigInt(chargeData.amountRaw);
+      const isPaid = totalOnChain >= required;
+      const remaining = required > totalOnChain ? required - totalOnChain : BigInt(0);
+
+      console.log(chalk.cyan("Charge:"), chargeData.id);
+      console.log(chalk.gray("  Status (saved):"), chargeData.status);
+      console.log(chalk.gray("  Address:"), chargeData.address);
+      console.log(chalk.gray("  Required:"), chargeData.amountNano, "XNO");
+      console.log(chalk.gray("  On-chain balance:"), BerryPayWallet.rawToNano(balance), "XNO");
+      console.log(chalk.gray("  On-chain pending:"), BerryPayWallet.rawToNano(pending), "XNO");
+      console.log(chalk.gray("  Total on-chain:"), totalOnChainNano, "XNO");
+      console.log(isPaid ? chalk.green("  PAID: Yes") : chalk.yellow("  PAID: No"));
+      if (!isPaid) {
+        console.log(chalk.yellow("  Remaining:"), BerryPayWallet.rawToNano(remaining.toString()), "XNO");
+      }
+      if (pendingBlocks.length > 0) {
+        console.log(chalk.yellow(`  ${pendingBlocks.length} pending block(s) to receive`));
+      }
+
+      console.log(JSON.stringify({
+        id: chargeData.id,
+        address: chargeData.address,
+        status: chargeData.status,
+        required: chargeData.amountNano,
+        requiredRaw: chargeData.amountRaw,
+        onChainBalance: BerryPayWallet.rawToNano(balance),
+        onChainPending: BerryPayWallet.rawToNano(pending),
+        totalOnChain: totalOnChainNano,
+        isPaid,
+        remaining: BerryPayWallet.rawToNano(remaining.toString()),
+        pendingBlocks: pendingBlocks.length,
+      }, null, 2));
+    } catch (error) {
+      spinner.fail("Failed to check blockchain");
+      console.error(chalk.red((error as Error).message));
+      process.exit(1);
+    }
   });
 
 charge
