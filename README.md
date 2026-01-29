@@ -59,8 +59,14 @@ berrypay charge create 0.5
 # Listen for payments (runs continuously)
 berrypay charge listen
 
-# Check status
+# Check status (auto-receives and sweeps if paid)
 berrypay charge status chg_abc123
+
+# Check without auto-sweep
+berrypay charge status chg_abc123 --no-sweep
+
+# Manually sweep a charge
+berrypay charge sweep chg_abc123
 
 # List all charges
 berrypay charge list
@@ -92,7 +98,8 @@ berrypay config                  # Show/set config
 
 berrypay charge create <amt>     # Create charge
 berrypay charge listen           # Listen for payments
-berrypay charge status <id>      # Check charge
+berrypay charge status <id>      # Check charge (auto-sweeps if paid)
+berrypay charge sweep <id>       # Manually sweep to main wallet
 berrypay charge list             # List charges
 berrypay charge cleanup          # Remove swept charges
 ```

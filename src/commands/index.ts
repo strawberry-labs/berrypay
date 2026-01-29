@@ -498,11 +498,12 @@ charge
 
 charge
   .command("status")
-  .description("Check charge status (polls blockchain)")
+  .description("Check charge status (polls blockchain, auto-receives and sweeps if paid)")
   .argument("<id>", "Charge ID")
-  .action(async (id: string) => {
+  .option("--no-sweep", "Don't auto-sweep if paid")
+  .action(async (id: string, options: { sweep: boolean }) => {
     const wallet = getWallet();
-    const processor = new PaymentProcessor({ wallet });
+    const processor = new PaymentProcessor({ wallet, autoSweep: false }); // We'll handle sweep manually
 
     const chargeData = processor.getCharge(id);
     if (!chargeData) {
@@ -514,44 +515,68 @@ charge
 
     try {
       // Check blockchain for actual balance and pending
-      const { balance, pending } = await wallet.getBalance(chargeData.accountIndex);
+      let { balance, pending } = await wallet.getBalance(chargeData.accountIndex);
       const pendingBlocks = await wallet.getPendingBlocks(chargeData.accountIndex);
 
-      spinner.stop();
-
       const totalOnChain = BigInt(balance) + BigInt(pending);
-      const totalOnChainNano = BerryPayWallet.rawToNano(totalOnChain.toString());
       const required = BigInt(chargeData.amountRaw);
       const isPaid = totalOnChain >= required;
       const remaining = required > totalOnChain ? required - totalOnChain : BigInt(0);
 
+      let swept = false;
+      let sweepHash: string | undefined;
+
+      // If there are pending blocks, receive them
+      if (pendingBlocks.length > 0) {
+        spinner.text = "Receiving pending blocks...";
+        await wallet.receivePending(chargeData.accountIndex);
+        // Refresh balance after receiving
+        const refreshed = await wallet.getBalance(chargeData.accountIndex);
+        balance = refreshed.balance;
+        pending = refreshed.pending;
+      }
+
+      // If fully paid and sweep enabled, sweep to main
+      if (isPaid && options.sweep && chargeData.status !== "swept") {
+        spinner.text = "Sweeping to main wallet...";
+        const result = await processor.sweepCharge(id);
+        if (result) {
+          swept = true;
+          sweepHash = result.hash;
+        }
+      }
+
+      spinner.stop();
+
+      const finalStatus = swept ? "swept" : (isPaid ? "completed" : chargeData.status);
+
       console.log(chalk.cyan("Charge:"), chargeData.id);
-      console.log(chalk.gray("  Status (saved):"), chargeData.status);
+      console.log(chalk.gray("  Status:"), finalStatus);
       console.log(chalk.gray("  Address:"), chargeData.address);
       console.log(chalk.gray("  Required:"), chargeData.amountNano, "XNO");
       console.log(chalk.gray("  On-chain balance:"), BerryPayWallet.rawToNano(balance), "XNO");
       console.log(chalk.gray("  On-chain pending:"), BerryPayWallet.rawToNano(pending), "XNO");
-      console.log(chalk.gray("  Total on-chain:"), totalOnChainNano, "XNO");
       console.log(isPaid ? chalk.green("  PAID: Yes") : chalk.yellow("  PAID: No"));
       if (!isPaid) {
         console.log(chalk.yellow("  Remaining:"), BerryPayWallet.rawToNano(remaining.toString()), "XNO");
       }
-      if (pendingBlocks.length > 0) {
-        console.log(chalk.yellow(`  ${pendingBlocks.length} pending block(s) to receive`));
+      if (swept) {
+        console.log(chalk.green("  Swept to main wallet"));
+        console.log(chalk.gray("  Sweep hash:"), sweepHash);
       }
 
       console.log(JSON.stringify({
         id: chargeData.id,
         address: chargeData.address,
-        status: chargeData.status,
+        status: finalStatus,
         required: chargeData.amountNano,
         requiredRaw: chargeData.amountRaw,
         onChainBalance: BerryPayWallet.rawToNano(balance),
         onChainPending: BerryPayWallet.rawToNano(pending),
-        totalOnChain: totalOnChainNano,
         isPaid,
         remaining: BerryPayWallet.rawToNano(remaining.toString()),
-        pendingBlocks: pendingBlocks.length,
+        swept,
+        sweepHash,
       }, null, 2));
     } catch (error) {
       spinner.fail("Failed to check blockchain");
@@ -584,6 +609,48 @@ charge
     }
 
     console.log(JSON.stringify({ charges: charges.map(c => ({ id: c.id, status: c.status, amount: c.amountNano, received: c.receivedNano })) }, null, 2));
+  });
+
+charge
+  .command("sweep")
+  .description("Manually sweep funds from a charge to main wallet")
+  .argument("<id>", "Charge ID")
+  .action(async (id: string) => {
+    const wallet = getWallet();
+    const processor = new PaymentProcessor({ wallet });
+
+    const charge = processor.getCharge(id);
+    if (!charge) {
+      console.error(chalk.red("Charge not found"));
+      console.log(JSON.stringify({ error: "Charge not found" }, null, 2));
+      process.exit(1);
+    }
+
+    const spinner = ora("Sweeping funds to main wallet...").start();
+
+    try {
+      // First receive any pending blocks
+      await wallet.receivePending(charge.accountIndex);
+
+      const result = await processor.sweepCharge(id);
+
+      if (result) {
+        spinner.succeed(chalk.green("Funds swept to main wallet"));
+        console.log(JSON.stringify({
+          success: true,
+          hash: result.hash,
+          amount: BerryPayWallet.rawToNano(result.amount),
+          mainAddress: processor.getMainAddress(),
+        }, null, 2));
+      } else {
+        spinner.warn(chalk.yellow("No funds to sweep"));
+        console.log(JSON.stringify({ success: false, reason: "No funds to sweep" }, null, 2));
+      }
+    } catch (err) {
+      spinner.fail(chalk.red("Sweep failed"));
+      console.error(err);
+      process.exit(1);
+    }
   });
 
 charge

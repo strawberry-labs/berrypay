@@ -1,6 +1,6 @@
 {
   "name": "berrypay",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Nano (XNO) cryptocurrency wallet CLI with payment processing for AI agents",
   "type": "module",
   "main": "./dist/index.js",
