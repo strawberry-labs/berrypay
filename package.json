@@ -1,6 +1,6 @@
 {
   "name": "berrypay",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Nano (XNO) cryptocurrency wallet CLI with payment processing for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,7 +37,8 @@
     "typescript": "^5.7.2"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "keywords": [
     "nano",
@@ -54,12 +55,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/strawberry-labs/berrypay.git"
+    "url": "git+https://github.com/strawberry-labs/berrypay-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/strawberry-labs/berrypay/issues"
+    "url": "https://github.com/strawberry-labs/berrypay-cli/issues"
   },
-  "homepage": "https://github.com/strawberry-labs/berrypay#readme",
+  "homepage": "https://github.com/strawberry-labs/berrypay-cli#readme",
   "author": "Strawberry Labs",
   "engines": {
     "node": ">=18.0.0"
