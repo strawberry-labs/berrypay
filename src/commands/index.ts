@@ -140,12 +140,37 @@ program
     console.log(JSON.stringify({ address }, null, 2));
   });
 
+// Helper to build Nano URI according to standard: nano:nano_<address>?amount=<raw>&label=<label>&message=<message>
+function buildNanoUri(address: string, options?: { amountRaw?: string; label?: string; message?: string }): string {
+  let uri = `nano:${address}`;
+  const params: string[] = [];
+
+  if (options?.amountRaw) {
+    params.push(`amount=${options.amountRaw}`);
+  }
+  if (options?.label) {
+    params.push(`label=${encodeURIComponent(options.label)}`);
+  }
+  if (options?.message) {
+    params.push(`message=${encodeURIComponent(options.message)}`);
+  }
+
+  if (params.length > 0) {
+    uri += "?" + params.join("&");
+  }
+
+  return uri;
+}
+
 program
   .command("address")
   .description("Show receiving address")
   .option("-i, --index <index>", "Account index", "0")
   .option("-q, --qr", "Display QR code in terminal and save as image")
   .option("-o, --output <path>", "Output path for QR image", "./nano-address-qr.png")
+  .option("-a, --amount <amount>", "Amount in XNO to include in QR")
+  .option("-l, --label <label>", "Label to include in QR")
+  .option("-m, --message <message>", "Message to include in QR")
   .action(async (options) => {
     const wallet = getWallet();
     const index = parseInt(options.index);
@@ -154,14 +179,29 @@ program
     console.log(chalk.cyan("Address:"), address);
 
     if (options.qr) {
-      const terminalQR = await QRCode.toString(address, {
+      // Build Nano URI for QR code
+      const uriOptions: { amountRaw?: string; label?: string; message?: string } = {};
+      if (options.amount) {
+        uriOptions.amountRaw = BerryPayWallet.nanoToRaw(options.amount);
+      }
+      if (options.label) {
+        uriOptions.label = options.label;
+      }
+      if (options.message) {
+        uriOptions.message = options.message;
+      }
+      const nanoUri = buildNanoUri(address, uriOptions);
+
+      console.log(chalk.cyan("URI:"), nanoUri);
+
+      const terminalQR = await QRCode.toString(nanoUri, {
         type: "terminal",
         small: true,
       });
       console.log("\n" + terminalQR);
 
       const outputPath = path.resolve(options.output);
-      await QRCode.toFile(outputPath, address, {
+      await QRCode.toFile(outputPath, nanoUri, {
         type: "png",
         width: 400,
         margin: 2,
@@ -169,10 +209,13 @@ program
       });
 
       console.log(chalk.green("QR saved:"), outputPath);
-    }
 
-    // JSON output
-    console.log(JSON.stringify({ address, index, ...(options.qr ? { qrPath: path.resolve(options.output) } : {}) }, null, 2));
+      // JSON output with URI
+      console.log(JSON.stringify({ address, index, uri: nanoUri, qrPath: outputPath }, null, 2));
+    } else {
+      // JSON output without QR
+      console.log(JSON.stringify({ address, index }, null, 2));
+    }
   });
 
 program
@@ -522,13 +565,17 @@ charge
     }
     console.log(chalk.gray("  Listener:"), "running");
 
+    // Build Nano URI with amount for wallet compatibility
+    const nanoUri = buildNanoUri(chargeData.address, { amountRaw: chargeData.amountRaw });
+    console.log(chalk.cyan("  URI:"), nanoUri);
+
     if (options.qr) {
-      const terminalQR = await QRCode.toString(chargeData.address, { type: "terminal", small: true });
+      const terminalQR = await QRCode.toString(nanoUri, { type: "terminal", small: true });
       console.log("\n" + terminalQR);
 
       if (options.output) {
         const outputPath = path.resolve(options.output);
-        await QRCode.toFile(outputPath, chargeData.address, { type: "png", width: 400, margin: 2 });
+        await QRCode.toFile(outputPath, nanoUri, { type: "png", width: 400, margin: 2 });
         console.log(chalk.green("QR saved:"), outputPath);
       }
     }
@@ -536,6 +583,7 @@ charge
     console.log(JSON.stringify({
       id: chargeData.id,
       address: chargeData.address,
+      uri: nanoUri,
       amount: chargeData.amountNano,
       amountRaw: chargeData.amountRaw,
       expiresAt: chargeData.expiresAt.toISOString(),
